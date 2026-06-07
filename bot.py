@@ -25,50 +25,71 @@ logger = logging.getLogger(__name__)
 
 # ─── FACEBOOK URL PATTERNS ────────────────────────────────────────────────────
 FB_PATTERNS = [
-    r"https?://(www\.|m\.|web\.)?facebook\.com/[^\s]+",
-    r"https?://fb\.watch/[^\s]+",
-    r"https?://fb\.me/[^\s]+",
+    r"https?://(?:www\.|m\.|web\.)?facebook\.com/\S+",
+    r"https?://fb\.watch/\S+",
+    r"https?://fb\.me/\S+",
 ]
 
 
-def extract_fb_links(text: str) -> list[str]:
+def extract_fb_links(text: str) -> list:
     """Trích xuất tất cả link Facebook trong tin nhắn."""
     links = []
     for pattern in FB_PATTERNS:
         links.extend(re.findall(pattern, text))
     # Loại bỏ dấu câu cuối link
-    return [re.sub(r"[),.\"]$", "", link) for link in links]
+    cleaned = [re.sub(r"[),.\"\s]+$", "", link) for link in links]
+    # Loại trùng, giữ thứ tự
+    seen = set()
+    result = []
+    for link in cleaned:
+        if link not in seen:
+            seen.add(link)
+            result.append(link)
+    return result
 
 
 def fetch_page_title(url: str) -> str:
-    """Lấy tiêu đề trang từ URL (Open Graph hoặc <title>)."""
-    try:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+    """Lấy tiêu đề trang, thử nhiều User-Agent."""
+    user_agents = [
+        "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Twitterbot/1.0",
+    ]
+    for ua in user_agents:
+        try:
+            headers = {
+                "User-Agent": ua,
+                "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8",
+            }
+            resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+            resp.raise_for_status()
+
+            # Ưu tiên Open Graph title
+            og_match = re.search(
+                r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+                resp.text, re.IGNORECASE,
             )
-        }
-        resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
-        resp.raise_for_status()
+            if og_match:
+                return og_match.group(1).strip()
 
-        # Ưu tiên Open Graph title
-        og_match = re.search(
-            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
-            resp.text,
-            re.IGNORECASE,
-        )
-        if og_match:
-            return og_match.group(1).strip()
+            # Thử content trước property
+            og_match2 = re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']',
+                resp.text, re.IGNORECASE,
+            )
+            if og_match2:
+                return og_match2.group(1).strip()
 
-        # Fallback: thẻ <title>
-        title_match = re.search(r"<title[^>]*>([^<]+)</title>", resp.text, re.IGNORECASE)
-        if title_match:
-            return title_match.group(1).strip()
+            # Fallback: thẻ <title>
+            title_match = re.search(r"<title[^>]*>([^<]+)</title>", resp.text, re.IGNORECASE)
+            if title_match:
+                title = title_match.group(1).strip()
+                if title and title.lower() not in ("facebook", ""):
+                    return title
 
-    except Exception as e:
-        logger.warning(f"Không lấy được tiêu đề cho {url}: {e}")
+        except Exception as e:
+            logger.warning(f"Thất bại cho {url}: {e}")
+            continue
 
     return "(Không lấy được tiêu đề)"
 
@@ -175,7 +196,6 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    # Xử lý cả caption trong ảnh/video được share kèm link
     app.add_handler(MessageHandler(filters.CAPTION & ~filters.COMMAND, handle_message))
 
     logger.info("🤖 Bot đang chạy...")
