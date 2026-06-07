@@ -2,6 +2,7 @@ import os
 import re
 import requests
 import logging
+from html import unescape
 from datetime import datetime
 from telegram import Update
 from telegram.ext import (
@@ -32,13 +33,10 @@ FB_PATTERNS = [
 
 
 def extract_fb_links(text: str) -> list:
-    """Trích xuất tất cả link Facebook trong tin nhắn."""
     links = []
     for pattern in FB_PATTERNS:
         links.extend(re.findall(pattern, text))
-    # Loại bỏ dấu câu cuối link
     cleaned = [re.sub(r"[),.\"\s]+$", "", link) for link in links]
-    # Loại trùng, giữ thứ tự
     seen = set()
     result = []
     for link in cleaned:
@@ -49,7 +47,6 @@ def extract_fb_links(text: str) -> list:
 
 
 def fetch_page_title(url: str) -> str:
-    """Lấy tiêu đề trang, thử nhiều User-Agent."""
     user_agents = [
         "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -70,20 +67,18 @@ def fetch_page_title(url: str) -> str:
                 resp.text, re.IGNORECASE,
             )
             if og_match:
-                return og_match.group(1).strip()
+                return unescape(og_match.group(1).strip())
 
-            # Thử content trước property
             og_match2 = re.search(
                 r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']',
                 resp.text, re.IGNORECASE,
             )
             if og_match2:
-                return og_match2.group(1).strip()
+                return unescape(og_match2.group(1).strip())
 
-            # Fallback: thẻ <title>
             title_match = re.search(r"<title[^>]*>([^<]+)</title>", resp.text, re.IGNORECASE)
             if title_match:
-                title = title_match.group(1).strip()
+                title = unescape(title_match.group(1).strip())
                 if title and title.lower() not in ("facebook", ""):
                     return title
 
@@ -95,7 +90,6 @@ def fetch_page_title(url: str) -> str:
 
 
 def push_to_sheet(timestamp: str, title: str, link: str) -> bool:
-    """Gửi dữ liệu lên Google Sheet qua Apps Script Web App."""
     try:
         payload = {"timestamp": timestamp, "title": title, "link": link}
         resp = requests.post(APPS_SCRIPT_URL, json=payload, timeout=15)
@@ -149,7 +143,6 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Xử lý mọi tin nhắn văn bản."""
     text = update.message.text or update.message.caption or ""
     links = extract_fb_links(text)
 
